@@ -250,7 +250,28 @@ try {
     source: "claude_ai",
   });
   assert(r.isError, "secret filter did not reject credential content");
-  console.log("secret filter OK (credential content rejected)");
+  // Secrets hidden in tags or project must be caught too.
+  r = await callTool(client, "save_memory", {
+    content: "harmless content",
+    source: "claude_ai",
+    tags: ["ghp_ABCDEFghijklmnopqrst0123456789"],
+  });
+  assert(r.isError && r.text.includes("in tags"), "secret filter did not reject credential in tags");
+  r = await callTool(client, "save_memory", {
+    content: "harmless content",
+    source: "claude_ai",
+    project: "password=hunter2-super-secret",
+  });
+  assert(r.isError && r.text.includes("in project"), "secret filter did not reject credential in project");
+  console.log("secret filter OK (credential in content, tags, and project all rejected)");
+
+  // --- consolidate_memory duplicate-id fast failure ---------------------------
+  r = await callTool(client, "consolidate_memory", {
+    memory_ids: [saves[0].id, saves[0].id],
+    summary: "should fail before touching the db layer",
+  });
+  assert(r.isError && r.text.includes("DISTINCT"), `duplicate ids not rejected clearly: ${r.text}`);
+  console.log("consolidate_memory duplicate-id rejection OK");
 
   await client.close();
   console.log("SMOKE TEST PASSED");

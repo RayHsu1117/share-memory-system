@@ -18,6 +18,10 @@
  *      short-lived single-use code.
  *   5. POST /oauth/token — authorization_code (+ PKCE verification) and
  *      refresh_token (with rotation) grants.
+ *   6. POST /oauth/revoke — RFC 7009 revocation of an access or refresh
+ *      token. Minimal single-token form: no token-family cascade (tokens
+ *      carry no lineage/session id, and for a single-owner server the
+ *      cheap "mark this one revoked" covers the practical need).
  *
  * Token format: opaque random tokens. The server stores only
  * HMAC-SHA256(OAUTH_SIGNING_SECRET, token) in Postgres, so tokens are
@@ -234,6 +238,16 @@ export class OAuthProvider {
       await this.handleToken(req, res);
       return true;
     }
+    if (path === "/oauth/revoke") {
+      if (req.method === "OPTIONS") return this.preflight(res, "POST, OPTIONS");
+      if (req.method !== "POST") {
+        res.setHeader("Allow", "POST");
+        sendJson(res, 405, { error: "invalid_request", error_description: "use POST" });
+        return true;
+      }
+      await this.handleRevoke(req, res);
+      return true;
+    }
     return false;
   }
 
@@ -286,6 +300,8 @@ export class OAuthProvider {
       registration_endpoint: `${base}/oauth/register`,
       response_types_supported: ["code"],
       response_modes_supported: ["query"],
+      revocation_endpoint: `${base}/oauth/revoke`,
+      revocation_endpoint_auth_methods_supported: ["none"],
       grant_types_supported: ["authorization_code", "refresh_token"],
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none"],
@@ -623,6 +639,35 @@ export class OAuthProvider {
       refresh_token: refreshToken,
       ...(scope ? { scope } : {}),
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Revocation endpoint (RFC 7009).
+  // -------------------------------------------------------------------------
+  /**
+   * POST /oauth/revoke with `token=...` (token_type_hint is accepted but not
+   * needed: token_hash is the primary key, so one UPDATE finds either kind).
+   * Per RFC 7009 section 2.2 the response is 200 even when the token is
+   * unknown or already revoked, so callers cannot probe which tokens exist.
+   * Deliberately minimal: no token-family cascade — tokens carry no lineage
+   * id to cascade over, and for this single-owner server "revoke the token
+   * you hold" is the whole practical use case (kill a leaked/retired client).
+   */
+  private async handleRevoke(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let params: Record<string, string>;
+    try {
+      params = await readParams(req);
+    } catch {
+      sendJson(res, 400, { error: "invalid_request", error_description: "unparseable body" });
+      return;
+    }
+    const token = params.token;
+    if (!token) {
+      sendJson(res, 400, { error: "invalid_request", error_description: "token is required" });
+      return;
+    }
+    await this.db.revokeToken(hmacHex(this.config.signingSecret, token));
+    sendJson(res, 200, {});
   }
 
   // -------------------------------------------------------------------------

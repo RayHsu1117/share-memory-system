@@ -172,6 +172,12 @@ export class MemoryDb {
 
       CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source);
       CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
+      -- Every list query orders by created_at DESC; a plain b-tree index
+      -- serves that via a backward scan. (Content ILIKE search stays a seq
+      -- scan on purpose: a trigram/GIN index needs CREATE EXTENSION pg_trgm,
+      -- which may be unavailable on managed Postgres and would fail startup —
+      -- not worth it at personal scale.)
+      CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at);
 
       CREATE TABLE IF NOT EXISTS memory_consolidations (
         id TEXT PRIMARY KEY,                    -- uuid
@@ -214,8 +220,36 @@ export class MemoryDb {
         scope TEXT,
         created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
-        revoked_at TEXT                           -- non-NULL once revoked (refresh rotation)
+        revoked_at TEXT                           -- non-NULL once revoked (refresh rotation or /oauth/revoke)
       );
+    `);
+
+    // Additive migration for databases created before oauth_codes had a
+    // foreign key to oauth_clients. Runs on every boot, idempotently:
+    //  1. Remove orphaned codes first (codes are 5-minute single-use rows, so
+    //     deleting strays is harmless) — otherwise ADD CONSTRAINT would fail
+    //     against a live database that ever had a client row removed by hand.
+    //  2. Add the constraint only if it does not exist yet (Postgres has no
+    //     ADD CONSTRAINT IF NOT EXISTS, hence the pg_constraint guard).
+    // ON DELETE CASCADE so manually de-registering a client can never strand
+    // rows that would break the next boot.
+    await this.pool.query(`
+      DELETE FROM oauth_codes
+       WHERE client_id NOT IN (SELECT client_id FROM oauth_clients);
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname = 'fk_oauth_codes_client'
+             AND conrelid = 'oauth_codes'::regclass
+        ) THEN
+          ALTER TABLE oauth_codes
+            ADD CONSTRAINT fk_oauth_codes_client
+            FOREIGN KEY (client_id) REFERENCES oauth_clients(client_id)
+            ON DELETE CASCADE;
+        END IF;
+      END $$;
     `);
   }
 
@@ -608,6 +642,19 @@ export class MemoryDb {
       [now, tokenHash]
     );
     return rows[0] ?? null;
+  }
+
+  /**
+   * Revoke a live token of either kind by hash (RFC 7009 /oauth/revoke).
+   * Idempotent: returns true only if a not-yet-revoked token was found.
+   */
+  async revokeToken(tokenHash: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE oauth_tokens SET revoked_at = $1
+       WHERE token_hash = $2 AND revoked_at IS NULL`,
+      [nowIso(), tokenHash]
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async close(): Promise<void> {

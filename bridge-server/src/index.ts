@@ -23,6 +23,7 @@
  *  - POST /oauth/register   — RFC 7591 Dynamic Client Registration
  *  - GET|POST /oauth/authorize — owner-password approval + code issuance
  *  - POST /oauth/token      — authorization_code (PKCE) + refresh_token grants
+ *  - POST /oauth/revoke     — RFC 7009 access/refresh token revocation
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -109,6 +110,31 @@ function errorResult(message: string) {
   };
 }
 
+/**
+ * Run the credential filter over every user-supplied text field that gets
+ * persisted — not just the main text but also tags and project, which would
+ * otherwise be an unfiltered path for a secret to slip into the database.
+ * Returns a human-readable "<pattern> in <field>" description, or null.
+ */
+function detectSecretInFields(input: {
+  text: string;
+  textField: string; // "content" | "summary" — for the error message
+  tags?: string[];
+  project?: string;
+}): string | null {
+  const textHit = detectSecret(input.text);
+  if (textHit) return `${textHit} in ${input.textField}`;
+  for (const tag of input.tags ?? []) {
+    const tagHit = detectSecret(tag);
+    if (tagHit) return `${tagHit} in tags`;
+  }
+  if (input.project) {
+    const projectHit = detectSecret(input.project);
+    if (projectHit) return `${projectHit} in project`;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // MCP server factory. Stateless Streamable HTTP creates a fresh McpServer per
 // request, so tool registration lives in a factory. The db pool is shared.
@@ -136,10 +162,10 @@ function buildServer(): McpServer {
       },
     },
     async ({ content, source, tags, project }) => {
-      const secret = detectSecret(content);
+      const secret = detectSecretInFields({ text: content, textField: "content", tags, project });
       if (secret) {
         return errorResult(
-          `Refused to save: content appears to contain a credential (${secret}). ` +
+          `Refused to save: input appears to contain a credential (${secret}). ` +
             `Never store API keys, passwords, or tokens in the memory bridge. ` +
             `(Heuristic check — rephrase without the secret and retry.)`
         );
@@ -321,16 +347,31 @@ function buildServer(): McpServer {
       },
     },
     async ({ memory_ids, summary, project, tags, source }) => {
-      const secret = detectSecret(summary);
+      const secret = detectSecretInFields({ text: summary, textField: "summary", tags, project });
       if (secret) {
         return errorResult(
-          `Refused to consolidate: summary appears to contain a credential (${secret}). ` +
+          `Refused to consolidate: input appears to contain a credential (${secret}). ` +
             `Never store API keys, passwords, or tokens in the memory bridge.`
+        );
+      }
+      // Fail fast on duplicate ids: the zod schema only checks array LENGTH
+      // >= 2, so ["a","a"] passes it but can never be a valid consolidation.
+      // Catching it here gives the caller an actionable message instead of
+      // the deeper db-layer error (which also guards this, as defense in depth).
+      const uniqueIdCount = new Set(memory_ids).size;
+      if (uniqueIdCount < 2) {
+        return errorResult(
+          `consolidate_memory needs at least 2 DISTINCT memory_ids, but the ` +
+            `${memory_ids.length} id(s) provided contain only ${uniqueIdCount} unique value. ` +
+            `Remove the duplicated id(s) and pass two or more different memory ids.`
         );
       }
       // Derive the new memory's source (the spec's consolidate_memory schema
       // has no source field, but the memories table requires one): explicit
-      // input > unanimous source of the constituents > first constituent's source.
+      // input > unanimous source of the constituents > first constituent's
+      // source. Taking sources[0] implements BOTH fallback cases at once:
+      // when all constituents agree, the first source IS the shared source;
+      // when they differ, the first one wins by definition.
       let resolvedSource: Source | undefined = source;
       if (!resolvedSource) {
         const sources = (
