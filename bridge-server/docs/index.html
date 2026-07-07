@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bridge Memory — 部署與設定指南</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --fg: #1f1f1e;
+    --muted: #6b6b66;
+    --card: #ffffff;
+    --border: #e2e2dd;
+    --accent: #6d5ae6;
+    --accent-fg: #ffffff;
+    --code-bg: #23231f;
+    --code-fg: #e8e8e2;
+    --ok: #2e7d4f;
+    --warn-bg: #fff7e8;
+    --warn-border: #e6c37a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191917;
+      --fg: #e9e9e4;
+      --muted: #a3a39b;
+      --card: #222220;
+      --border: #3a3a36;
+      --accent: #8f7ff0;
+      --accent-fg: #14141a;
+      --code-bg: #101010;
+      --code-fg: #dcdcd4;
+      --ok: #6fcf97;
+      --warn-bg: #2c2417;
+      --warn-border: #8a6d2f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+    line-height: 1.75;
+  }
+  main { max-width: 780px; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+  h1 { font-size: 1.7rem; margin: 0 0 .5rem; line-height: 1.35; }
+  h2 { font-size: 1.25rem; margin: 2.8rem 0 .8rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
+  p { margin: .6rem 0; }
+  .pitch { color: var(--muted); font-size: 1.02rem; margin-bottom: 1.4rem; }
+  .deploy-btn img { height: 40px; display: block; }
+  .deploy-btn { display: inline-block; margin: .4rem 0 .2rem; }
+  .btn-note { font-size: .85rem; color: var(--muted); }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.2rem 1.3rem;
+    margin: 1rem 0;
+  }
+  label { display: block; font-weight: 600; margin: .9rem 0 .25rem; font-size: .95rem; }
+  .hint { font-weight: 400; color: var(--muted); font-size: .85rem; }
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: .55rem .7rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: .95rem;
+    font-family: Consolas, "Courier New", monospace;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  button {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    padding: .5rem 1.1rem;
+    background: var(--card);
+    color: var(--fg);
+  }
+  button.primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
+    font-weight: 600;
+    margin-top: 1.1rem;
+  }
+  button:hover { filter: brightness(1.06); }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: .9rem 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: .87rem;
+    line-height: 1.6;
+    font-family: Consolas, "Courier New", monospace;
+    margin: .8rem 0 .4rem;
+  }
+  code {
+    background: var(--border);
+    padding: .1em .35em;
+    border-radius: 4px;
+    font-size: .88em;
+    font-family: Consolas, "Courier New", monospace;
+    word-break: break-all;
+  }
+  pre code { background: none; padding: 0; word-break: normal; }
+  .trust {
+    display: flex;
+    gap: .6rem;
+    align-items: flex-start;
+    font-size: .9rem;
+    color: var(--ok);
+    border: 1px solid var(--ok);
+    border-radius: 8px;
+    padding: .6rem .8rem;
+    margin: .9rem 0 0;
+  }
+  .warn {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: 8px;
+    padding: .8rem 1rem;
+    font-size: .92rem;
+    margin: 1rem 0;
+  }
+  ol li, ul li { margin: .35rem 0; }
+  .copy-row { display: flex; gap: .6rem; align-items: center; margin-top: .4rem; }
+  .copy-status { font-size: .85rem; color: var(--ok); min-height: 1.2em; }
+  .err { color: #c0392b; font-size: .88rem; min-height: 1.2em; margin-top: .5rem; }
+  @media (prefers-color-scheme: dark) { .err { color: #ff8b7a; } }
+  #result-block { display: none; margin-top: 1.2rem; }
+  a { color: var(--accent); }
+  footer { margin-top: 3.5rem; font-size: .85rem; color: var(--muted); border-top: 1px solid var(--border); padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bridge Memory MCP Server</h1>
+  <p class="pitch">讓 claude.ai 與 Claude Code 共用同一份持續累積記憶的橋接服務——部署後完全屬於你自己,資料存在你自己的 Postgres 裡。</p>
+
+  <a class="deploy-btn" href="https://railway.com/deploy/saz1QE?referralCode=Nt8u9B&amp;utm_medium=integration&amp;utm_source=template&amp;utm_campaign=generic">
+    <img alt="Deploy on Railway" src="data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='40'%3E%3Crect width='180' height='40' rx='6' fill='%230B0D0E'/%3E%3Ctext x='90' y='25' font-family='Segoe UI,sans-serif' font-size='14' font-weight='600' fill='%23fff' text-anchor='middle'%3EDeploy on Railway%3C/text%3E%3C/svg%3E">
+  </a>
+  <p class="btn-note">點按鈕部署到你自己的 Railway 帳號:只需要填一組 <code>OAUTH_OWNER_PASSWORD</code>(你自己的核准密碼),其餘變數自動設定,等約兩分鐘即可。</p>
+
+  <h2>步驟一:部署完成後,先拿兩樣東西</h2>
+  <ol>
+    <li>在 Railway 專案裡點 bridge-server 服務 → <strong>Settings → Networking</strong>,複製你的公開網址(長得像 <code>https://xxx.up.railway.app</code>)。</li>
+    <li>同服務的 <strong>Variables</strong> 頁面,複製 <code>BRIDGE_AUTH_TOKEN</code> 的值(部署時自動產生的隨機密鑰)。</li>
+  </ol>
+
+  <h2>步驟二:產生 Claude Code 連線指令</h2>
+  <div class="card">
+    <div class="trust">
+      <span aria-hidden="true">&#128274;</span>
+      <span><strong>這個小工具完全在你的瀏覽器裡執行</strong>——只做本地字串組合,沒有任何 <code>fetch</code>、表單送出、分析追蹤或對外連線,你的 token 不會被傳送到任何地方。不放心的話,可以直接檢視本頁原始碼確認(整頁只有這一個檔案,沒有外部腳本)。</span>
+    </div>
+
+    <label for="railway-url">1. 你的 Railway 網址 <span class="hint">(例如 https://xxx.up.railway.app,結尾不要有斜線)</span></label>
+    <input type="text" id="railway-url" placeholder="https://xxx.up.railway.app" autocomplete="off" spellcheck="false">
+
+    <label for="auth-token">2. 你的 BRIDGE_AUTH_TOKEN <span class="hint">(從 Railway 的 Variables 頁面複製)</span></label>
+    <input type="password" id="auth-token" placeholder="貼上 token" autocomplete="off" spellcheck="false">
+
+    <button class="primary" id="generate-btn" type="button">產生指令</button>
+    <div class="err" id="form-err"></div>
+
+    <div id="result-block">
+      <p style="margin-bottom:.2rem;">在終端機執行這行指令(<code>--scope user</code> 讓所有專案資料夾都能用):</p>
+      <pre><code id="command-output"></code></pre>
+      <div class="copy-row">
+        <button id="copy-btn" type="button">複製到剪貼簿</button>
+        <span class="copy-status" id="copy-status"></span>
+      </div>
+    </div>
+  </div>
+
+  <h2>步驟三:接上 claude.ai(自訂連接器)</h2>
+  <p>claude.ai → <strong>Settings → Connectors → Add custom connector</strong>:</p>
+  <ol>
+    <li><strong>只填 URL</strong>:<code>https://xxx.up.railway.app/mcp</code>(不用填任何 Header/token 欄位——claude.ai 的自訂連接器強制走 OAuth,沒有填 Bearer token 的選項)。</li>
+    <li>claude.ai 會自動探索 OAuth 端點(<code>/.well-known/oauth-protected-resource</code>、<code>/.well-known/oauth-authorization-server</code>)、透過 <code>/oauth/register</code> 動態註冊 client,然後跳出瀏覽器授權頁。</li>
+    <li>在授權頁輸入你部署時設定的 <code>OAUTH_OWNER_PASSWORD</code> 核准連線。</li>
+    <li>通過後自動導回 claude.ai,連接器顯示已連線,即可使用 <code>save_memory</code> / <code>search_memory</code> 等工具。</li>
+  </ol>
+  <div class="warn">
+    <strong>&#9888;&#65039; 已知問題:</strong>即使伺服器端 OAuth 完全正確,claude.ai 端仍有已回報的 bug(GitHub <code>anthropics/claude-ai-mcp</code> issue #112、#457),偶爾會在註冊階段失敗,跳出「Couldn't register with sign-in service」。遇到時:
+    <ol>
+      <li>先用瀏覽器直接打開 <code>https://你的網址/.well-known/oauth-authorization-server</code>,確認有正常回傳 JSON(不是 404 或連不上)。如果這裡就失敗,才是自己伺服器的問題——通常是 <code>PUBLIC_BASE_URL</code> 沒設對或還沒重新部署。</li>
+      <li>如果上面那個網址正常,問題大機率在 claude.ai 那端:重新整理再試一次,或稍後再試。這不是你設定錯,是已知的上游限制。</li>
+    </ol>
+  </div>
+
+  <footer>
+    完整文件(手動部署步驟、環境變數說明、已知限制)請見 GitHub repo 的 README。
+    本頁為純靜態網頁,無後端、無資料收集。
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  // 本頁所有邏輯都在這裡:純本地字串組合 + 剪貼簿複製。
+  // 沒有 fetch / XMLHttpRequest / sendBeacon / WebSocket / 表單送出,
+  // 也沒有任何外部資源載入——使用者輸入的 token 絕不離開瀏覽器。
+
+  var urlInput = document.getElementById("railway-url");
+  var tokenInput = document.getElementById("auth-token");
+  var generateBtn = document.getElementById("generate-btn");
+  var resultBlock = document.getElementById("result-block");
+  var commandOutput = document.getElementById("command-output");
+  var copyBtn = document.getElementById("copy-btn");
+  var copyStatus = document.getElementById("copy-status");
+  var formErr = document.getElementById("form-err");
+
+  function buildCommand(url, token) {
+    return 'claude mcp add --transport http bridge-memory ' + url + '/mcp \\\n' +
+           '  --header "Authorization: Bearer ' + token + '" \\\n' +
+           '  --scope user';
+  }
+
+  function generate() {
+    formErr.textContent = "";
+    copyStatus.textContent = "";
+
+    var url = urlInput.value.trim();
+    var token = tokenInput.value.trim();
+
+    if (!url || !token) {
+      formErr.textContent = "兩個欄位都要填。";
+      resultBlock.style.display = "none";
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      formErr.textContent = "網址要以 https:// 開頭(直接從 Railway 複製整串網址)。";
+      resultBlock.style.display = "none";
+      return;
+    }
+    // 去掉結尾斜線,避免組出 //mcp
+    url = url.replace(/\/+$/, "");
+
+    if (/["\\\s]/.test(token)) {
+      formErr.textContent = "token 裡不應該有空白、引號或反斜線,請確認是從 Railway Variables 完整複製的值。";
+      resultBlock.style.display = "none";
+      return;
+    }
+
+    commandOutput.textContent = buildCommand(url, token);
+    resultBlock.style.display = "block";
+  }
+
+  function copyCommand() {
+    var text = commandOutput.textContent;
+    function done(ok) {
+      copyStatus.textContent = ok ? "已複製!直接貼到終端機執行即可。" : "複製失敗,請手動選取上面的指令複製。";
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+    } else {
+      // 舊瀏覽器 fallback:一樣純本地,只操作剪貼簿
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      done(ok);
+    }
+  }
+
+  generateBtn.addEventListener("click", generate);
+  copyBtn.addEventListener("click", copyCommand);
+  tokenInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") generate();
+  });
+  urlInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") generate();
+  });
+})();
+</script>
+</body>
+</html>
